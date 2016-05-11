@@ -31,7 +31,8 @@ def configure_ha_resources(hacluster, service_name, ha_resources=None):
     resources = CRM()
     for res_type in ha_resources:
         resources = RESOURCE_TYPES[res_type](resources, service_name)
-    hacluster.bind_on(iface=user_config['vip_iface'], mcastport=4440)
+    # TODO Remove hardcoded multicast port
+    hacluster.bind_on(iface=user_config[IFACE_KEY], mcastport=4440)
     hacluster.manage_resources(resources)
 
 def configure_vips(_resources, service_name):
@@ -48,18 +49,14 @@ def configure_vips(_resources, service_name):
                     service_name,
                     vip,
                     nic=iface,
-                    cidr=netmask
-                )
-            )
+                    cidr=netmask,))
     return _resources
 
 def configure_haproxy(_resources, service_name):
     _resources.add(
         InitService(
             service_name,
-            'haproxy',
-        )
-    )
+            'haproxy',))
     return _resources
 
 class InitService(ResourceDescriptor):
@@ -70,8 +67,7 @@ class InitService(ResourceDescriptor):
     def configure_resource(self, crm):
         res_key = 'res_{}_{}'.format(
             self.service_name.replace('-', '_'),
-            self.init_service_name.replace('-', '_')
-        )
+            self.init_service_name.replace('-', '_'))
         clone_key = 'cl_{}'.format(res_key)
         res_type = 'lsb:{}'.format(self.init_service_name)
         crm.primitive(res_key, res_type, params='op monitor interval="5s"')
