@@ -23,6 +23,13 @@ from charmhelpers.core.hookenv import leader_get, leader_set
 from charms.reactive.bus import set_state, remove_state
 
 from charm.openstack.ip import PUBLIC, INTERNAL, ADMIN, canonical_url
+import charmhelpers.contrib.network.ip as ip
+import charm.openstack.ha as ha
+from relations.hacluster.common import CRM
+
+VIP_KEY = "vip"
+CIDR_KEY = "vip_cidr"
+IFACE_KEY = "vip_iface"
 
 
 class OpenStackCharm(object):
@@ -51,6 +58,7 @@ class OpenStackCharm(object):
     restart_map = {}
     sync_cmd = []
     services = []
+    ha_resources = []
     adapters_class = None
 
     def __init__(self, interfaces=None):
@@ -149,6 +157,40 @@ class OpenStackCharm(object):
             # Restart services immediatly after db sync as
             # render_domain_config needs a working system
             self.restart_all()
+
+    def configure_ha_resources(self, hacluster):
+        RESOURCE_TYPES = {
+            'vips': self.add_ha_vips_config,
+            'haproxy': self.add_ha_haproxy_config,
+        }
+        self.resources = CRM()
+        if not self.ha_resources:
+            return
+        for res_type in self.ha_resources:
+            RESOURCE_TYPES[res_type]()
+        # TODO Remove hardcoded multicast port
+        hacluster.bind_on(iface=self.config[IFACE_KEY], mcastport=4440)
+        hacluster.manage_resources(self.resources)
+
+    def add_ha_vips_config(self):
+        for vip in self.config.get(VIP_KEY, []).split():
+            iface = (ip.get_iface_for_address(vip) or
+                     self.config(IFACE_KEY))
+            netmask = (ip.get_netmask_for_address(vip) or
+                       self.config(CIDR_KEY))
+            if iface is not None:
+                self.resources.add(
+                    ha.VirtualIP(
+                        self.name,
+                        vip,
+                        nic=iface,
+                        cidr=netmask,))
+
+    def add_ha_haproxy_config(self):
+        self.resources.add(
+            ha.InitService(
+                self.name,
+                'haproxy',))
 
 
 class OpenStackCharmFactory(object):

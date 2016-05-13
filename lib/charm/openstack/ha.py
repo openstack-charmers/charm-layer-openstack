@@ -1,65 +1,20 @@
 """Classes for enabling ha in Openstack charms with the reactive framework"""
 
+import relations.hacluster.common
+
 import ipaddress
-
-import charmhelpers.contrib.network.ip as ip
-from charmhelpers.core.hookenv import unit_private_ip, config
-from relations.hacluster.common import CRM
-from relations.hacluster.common import ResourceDescriptor
-
-VIP_KEY = "vip"
-CIDR_KEY = "vip_cidr"
-IFACE_KEY = "vip_iface"
 
 """Configure ha resources with:
 @when('ha.connected')
 def cluster_connected(hacluster):
-    ha.configure_ha_resources(hacluster, 'designate', ha_resources=['vips', 'haproxy'])
+    charm = DesignateCharmFactory.charm()
+    charm.configure_ha_resources(hacluster)
 
 TODO Proper docs to follow
 """
 
-def configure_ha_resources(hacluster, service_name, ha_resources=None):
-    user_config = config()
 
-    RESOURCE_TYPES = {
-        'vips': configure_vips,
-        'haproxy': configure_haproxy,
-    }
-    if not ha_resources:
-        return
-    resources = CRM()
-    for res_type in ha_resources:
-        resources = RESOURCE_TYPES[res_type](resources, service_name)
-    # TODO Remove hardcoded multicast port
-    hacluster.bind_on(iface=user_config[IFACE_KEY], mcastport=4440)
-    hacluster.manage_resources(resources)
-
-def configure_vips(_resources, service_name):
-    user_config = config()
-
-    for vip in user_config.get(VIP_KEY, []).split():
-        iface = (ip.get_iface_for_address(vip) or
-                 config(IFACE_KEY)) 
-        netmask = (ip.get_netmask_for_address(vip) or
-                   config(CIDR_KEY))
-        if iface is not None:
-            _resources.add(
-                VirtualIP(
-                    service_name,
-                    vip,
-                    nic=iface,
-                    cidr=netmask,))
-    return _resources
-
-def configure_haproxy(_resources, service_name):
-    _resources.add(
-        InitService(
-            service_name,
-            'haproxy',))
-    return _resources
-
-class InitService(ResourceDescriptor):
+class InitService(relations.hacluster.common.ResourceDescriptor):
     def __init__(self, service_name, init_service_name):
         self.service_name = service_name
         self.init_service_name = init_service_name
@@ -74,7 +29,8 @@ class InitService(ResourceDescriptor):
         crm.init_services(self.init_service_name)
         crm.clone(clone_key, res_key)
 
-class VirtualIP(ResourceDescriptor):
+
+class VirtualIP(relations.hacluster.common.ResourceDescriptor):
     def __init__(self, service_name, vip, nic=None, cidr=None):
         self.service_name = service_name
         self.vip = vip
