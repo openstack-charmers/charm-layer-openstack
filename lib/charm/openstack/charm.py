@@ -10,7 +10,7 @@ from collections import OrderedDict
 from charmhelpers.contrib.openstack.utils import (
     configure_installation_source,
 )
-from charmhelpers.core.host import path_hash, service_restart
+from charmhelpers.core.host import path_hash, service_restart, pwgen
 from charmhelpers.core.hookenv import config, status_set
 from charmhelpers.fetch import (
     apt_install,
@@ -20,7 +20,7 @@ from charmhelpers.fetch import (
 from charmhelpers.contrib.openstack.templating import get_loader
 from charmhelpers.core.templating import render
 from charmhelpers.core.hookenv import leader_get, leader_set
-from charms.reactive.bus import set_state, remove_state
+from charms.reactive.bus import set_state, remove_state, get_state
 
 from charm.openstack.ip import PUBLIC, INTERNAL, ADMIN, canonical_url
 import charmhelpers.contrib.network.ip as ip
@@ -68,6 +68,7 @@ class OpenStackCharm(object):
         self.release = 'liberty'
         if interfaces and self.adapters_class:
             self.adapter_instance = self.adapters_class(interfaces)
+        self.set_haproxy_stat_password()
 
     def enable_haproxy(self):
         return 'haproxy' in self.ha_resources
@@ -210,6 +211,10 @@ class OpenStackCharm(object):
             ha.InitService(
                 self.name,
                 'haproxy',))
+
+    def set_haproxy_stat_password(self):
+        if not get_state('haproxy.stat.password'):
+            set_state('haproxy.stat.password', pwgen(32))
 
 
 class OpenStackCharmFactory(object):
