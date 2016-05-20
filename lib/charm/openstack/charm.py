@@ -40,7 +40,7 @@ class OpenStackCharm(object):
 
     name = 'charmname'
 
-    packages = []
+    base_packages = []
     """Packages to install"""
 
     api_ports = {}
@@ -55,11 +55,12 @@ class OpenStackCharm(object):
     default_service = None
     """Default service for the charm"""
 
-    restart_map = {}
+    base_restart_map = {}
     sync_cmd = []
     services = []
     ha_resources = []
     adapters_class = None
+    HAPROXY_CONF = '/etc/haproxy/haproxy.cfg'
 
     def __init__(self, interfaces=None):
         self.config = config()
@@ -67,6 +68,24 @@ class OpenStackCharm(object):
         self.release = 'liberty'
         if interfaces and self.adapters_class:
             self.adapter_instance = self.adapters_class(interfaces)
+
+    def enable_haproxy(self):
+        return 'haproxy' in self.ha_resources
+
+    @property
+    def packages(self):
+        _packages = []
+        _packages.extend(self.base_packages)
+        if self.enable_haproxy():
+            _packages.append('haproxy')
+        return _packages
+
+    @property
+    def restart_map(self):
+        _restart_map = self.base_restart_map.copy()
+        if self.enable_haproxy():
+            _restart_map[self.HAPROXY_CONF] = ['haproxy']
+        return _restart_map
 
     def install(self):
         """
