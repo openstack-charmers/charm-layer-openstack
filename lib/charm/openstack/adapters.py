@@ -248,7 +248,7 @@ class APIConfigurationAdapter(ConfigurationAdapter):
             for service in self.port_map.keys():
                 service_ports[service] = [
                     self.port_map[service]['admin'],
-                    determine_apache_port(self.port_map[service]['admin']),
+                    determine_apache_port(self.port_map[service]['admin'], singlenode_mode=True),
                 ]
         return service_ports
 
@@ -261,7 +261,9 @@ class APIConfigurationAdapter(ConfigurationAdapter):
                 info[key] = {
                     'proto': 'http',
                     'ip': self.local_address,
-                    'port': determine_apache_port(self.port_map[service]['admin'])}
+                    'port': determine_apache_port(
+                        self.port_map[service]['admin'],
+                        singlenode_mode=True)}
                 info[key]['url'] = '{proto}://{ip}:{port}'.format(**info[key])
         return info
 

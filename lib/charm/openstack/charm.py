@@ -26,6 +26,7 @@ from charm.openstack.ip import PUBLIC, INTERNAL, ADMIN, canonical_url
 import charmhelpers.contrib.network.ip as ip
 import charm.openstack.ha as ha
 from relations.hacluster.common import CRM
+import relations.openstack_ha.peers as ha_peers
 
 VIP_KEY = "vip"
 CIDR_KEY = "vip_cidr"
@@ -236,6 +237,11 @@ class OpenStackCharmFactory(object):
         Get an instance of the right charm for the
         configured OpenStack series
         """
+        cluster_interface = ha_peers.OpenstackHAPeers('cluster')
+        if interfaces:
+            interfaces.append(cluster_interface)
+        else:
+            interfaces=[cluster_interface]
         if release and release in cls.releases:
             return cls.releases[release](interfaces=interfaces)
         else:
