@@ -1,6 +1,12 @@
 """Adapter classes and utilities for use with Reactive interfaces"""
 
-from charmhelpers.core import hookenv
+import charms.reactive.bus as reactive_bus
+import charmhelpers.contrib.hahelpers.cluster as ch_cluster
+import charmhelpers.contrib.network.ip as ch_ip
+import charmhelpers.contrib.openstack.utils as ch_utils
+import charmhelpers.core.hookenv as hookenv
+
+ADDRESS_TYPES = ['admin', 'internal', 'public']
 
 
 class OpenStackRelationAdapter(object):
@@ -82,6 +88,49 @@ class RabbitMQRelationAdapter(OpenStackRelationAdapter):
             return None
 
 
+class PeerHARelationAdapter(OpenStackRelationAdapter):
+    """
+    Adapter for cluster relation of nodes of the same service
+    """
+
+    interface_type = "cluster"
+
+    def __init__(self, relation):
+        super(PeerHARelationAdapter, self).__init__(relation)
+        self.config = hookenv.config()
+        self.local_address = APIConfigurationAdapter().local_address
+        self.local_unit_name = APIConfigurationAdapter().local_unit_name
+        self.cluster_hosts = {}
+        self.add_network_split_addresses()
+        self.add_default_addresses()
+
+    def add_network_split_addresses(self):
+        """Populate cluster_hosts with addresses of peers on a given network if
+        this node is also on that network"""
+        for addr_type in ADDRESS_TYPES:
+            cfg_opt = 'os-{}-network'.format(addr_type)
+            laddr = ch_ip.get_address_in_network(self.config.get(cfg_opt))
+            if laddr:
+                netmask = ch_ip.get_netmask_for_address(laddr)
+                self.cluster_hosts[laddr] = {
+                    'network': "{}/{}".format(laddr, netmask),
+                    'backends': {self.local_unit_name: laddr}}
+                key = '{}-address'.format(addr_type)
+                for _unit, _laddr in self.relation.ip_map(address_key=key):
+                    self.cluster_hosts[laddr]['backends'][_unit] = _laddr
+
+    def add_default_addresses(self):
+        """Populate cluster_hosts with addresses supplied by private-address
+        """
+        self.cluster_hosts[self.local_address] = {}
+        netmask = ch_ip.get_netmask_for_address(self.local_address)
+        self.cluster_hosts[self.local_address] = {
+            'network': "{}/{}".format(self.local_address, netmask),
+            'backends': {self.local_unit_name: self.local_address}}
+        for _unit, _laddr in self.relation.ip_map():
+            self.cluster_hosts[self.local_address]['backends'][_unit] = _laddr
+
+
 class DatabaseRelationAdapter(OpenStackRelationAdapter):
     """
     Adapter for the Database relation interface.
@@ -148,6 +197,153 @@ class ConfigurationAdapter(object):
             setattr(self, k, v)
 
 
+class APIConfigurationAdapter(ConfigurationAdapter):
+    """This configuration adapter extends the base class and adds properties
+    common accross most OpenstackAPI services"""
+
+    def __init__(self, port_map=None):
+        super(APIConfigurationAdapter, self).__init__()
+        self.port_map = port_map
+        self.config = hookenv.config()
+
+    @property
+    def ipv6_mode(self):
+        """Return if charm should enable IPv6
+
+        @return True if user has requested ipv6 support otherwise False
+        """
+        return self.config.get('prefer-ipv6', False)
+
+    @property
+    def local_address(self):
+        """Return remotely accessible address of charm (not localhost)
+
+        @return True if user has requested ipv6 support otherwise False
+        """
+        if self.ipv6_mode:
+            addr = ch_ip.get_ipv6_addr(exc_list=[self.config('vip')])[0]
+        else:
+            addr = ch_utils.get_host_ip(hookenv.unit_get('private-address'))
+        return addr
+
+    @property
+    def local_unit_name(self):
+        """
+        @return local unit name
+        """
+        return hookenv.local_unit().replace('/', '-')
+
+    @property
+    def local_host(self):
+        """Return localhost address depending on whether IPv6 is enabled
+
+        @return localhost ip address
+        """
+        return 'ip6-localhost' if self.ipv6_mode else '127.0.0.1'
+
+    @property
+    def haproxy_host(self):
+        """Return haproxy bind address depending on whether IPv6 is enabled
+
+        @return address
+        """
+        return '::' if self.ipv6_mode else '0.0.0.0'
+
+    @property
+    def haproxy_stat_port(self):
+        """Port to listen on to access haproxy statistics
+
+        @return port
+        """
+        return '8888'
+
+    @property
+    def haproxy_stat_password(self):
+        """Password for accessing haproxy statistics
+
+        @return password
+        """
+        return reactive_bus.get_state('haproxy.stat.password')
+
+    @property
+    def service_ports(self):
+        """Dict of service names and the ports they listen on
+
+        @return {'svc1': 'portA', 'svc2': 'portB', ...}
+        """
+        service_ports = {}
+        if self.port_map:
+            for service in self.port_map.keys():
+                service_ports[service] = [
+                    self.port_map[service]['admin'],
+                    ch_cluster.determine_apache_port(
+                        self.port_map[service]['admin'],
+                        singlenode_mode=True)]
+        return service_ports
+
+    @property
+    def service_listen_info(self):
+        """Dict of service names and attributes for backend to listen on
+
+        @return {
+                    'svc1': {
+                        'proto': 'http',
+                        'ip': '10.0.0.10',
+                        'port': '8080',
+                        'url': 'http://10.0.0.10:8080},
+                    'svc2': {
+                        'proto': 'https',
+                        'ip': '10.0.0.20',
+                        'port': '8443',
+                        'url': 'https://10.0.0.20:8443},
+                ...
+
+        """
+        info = {}
+        if self.port_map:
+            for service in self.port_map.keys():
+                key = service.replace('-', '_')
+                info[key] = {
+                    'proto': 'http',
+                    'ip': self.local_address,
+                    'port': ch_cluster.determine_apache_port(
+                        self.port_map[service]['admin'],
+                        singlenode_mode=True)}
+                info[key]['url'] = '{proto}://{ip}:{port}'.format(**info[key])
+        return info
+
+    @property
+    def external_endpoints(self):
+        """Dict of service names and attributes that clients use to connect
+
+        @return {
+                    'svc1': {
+                        'proto': 'http',
+                        'ip': '10.0.0.10',
+                        'port': '8080',
+                        'url': 'http://10.0.0.10:8080},
+                    'svc2': {
+                        'proto': 'https',
+                        'ip': '10.0.0.20',
+                        'port': '8443',
+                        'url': 'https://10.0.0.20:8443},
+                ...
+
+        """
+        info = {}
+        info = {}
+        ip = self.config.get('vip', self.local_address)
+        if self.port_map:
+            for service in self.port_map.keys():
+                key = service.replace('-', '_')
+                info[key] = {
+                    'proto': 'http',
+                    'ip': ip,
+                    'port': self.port_map[service]['admin']}
+                info[key]['url'] = '{proto}://{ip}:{port}'.format(**info[key])
+        return info
+
+
 class OpenStackRelationAdapters(object):
     """
     Base adapters class for OpenStack Charms, used to aggregate
@@ -171,13 +367,17 @@ class OpenStackRelationAdapters(object):
     _adapters = {
         'amqp': RabbitMQRelationAdapter,
         'shared_db': DatabaseRelationAdapter,
+        'cluster': PeerHARelationAdapter,
     }
     """
     Default adapter mappings; may be overridden by relation adapters
     in subclasses.
+
+    Additional kwargs can be passed to the configuration adapterwhich has been
+    specified via the options parameter
     """
 
-    def __init__(self, relations, options=ConfigurationAdapter):
+    def __init__(self, relations, options=ConfigurationAdapter, **kwargs):
         self._adapters.update(self.relation_adapters)
         self._relations = []
         for relation in relations:
@@ -188,7 +388,7 @@ class OpenStackRelationAdapters(object):
                 relation_value = OpenStackRelationAdapter(relation)
             setattr(self, relation_name, relation_value)
             self._relations.append(relation_name)
-        self.options = options()
+        self.options = options(**kwargs)
         self._relations.append('options')
 
     def __iter__(self):
