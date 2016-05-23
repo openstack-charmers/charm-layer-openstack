@@ -1,8 +1,8 @@
 """Classes for enabling ha in Openstack charms with the reactive framework"""
 
+import ipaddress
 import relations.hacluster.common
 
-import ipaddress
 
 """Configure ha resources with:
 @when('ha.connected')
